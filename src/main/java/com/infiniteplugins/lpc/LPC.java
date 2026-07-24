@@ -119,8 +119,8 @@ public class LPC {
         // Convert standard legacy & color codes to MiniMessage tags for the rest
         format = format.replace("&", "<").replace(">", ">");
 
-        TagResolver placeholders = MiniPlaceholders.getAudienceGlobalPlaceholders(player);
-        Component finalMessage = MiniMessage.miniMessage().deserialize(format, placeholders);
+        TagResolver placeholders = MiniPlaceholders.audiencePlaceholders();
+        Component finalMessage = MiniMessage.miniMessage().deserialize(format, player, placeholders);
         
         // Broadcast to everyone on the proxy
         server.sendMessage(finalMessage);
