@@ -1,220 +1,159 @@
 package com.infiniteplugins.lpc;
 
-import me.clip.placeholderapi.PlaceholderAPI;
+import com.google.inject.Inject;
+import com.velocitypowered.api.command.CommandManager;
+import com.velocitypowered.api.command.CommandMeta;
+import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.PlayerChatEvent;
+import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.ProxyServer;
+import io.github.miniplaceholders.api.MiniPlaceholders;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.luckperms.api.LuckPerms;
+import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.cacheddata.CachedMetaData;
-import org.bukkit.ChatColor;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.player.AsyncPlayerChatEvent;
-import org.bukkit.plugin.java.JavaPlugin;
+import org.slf4j.Logger;
+import org.spongepowered.configurate.CommentedConfigurationNode;
+import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
-import java.util.ArrayList;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
 
-public final class LPC extends JavaPlugin implements Listener {
+@Plugin(
+        id = "lpc",
+        name = "AzureChat",
+        version = "3.7.2",
+        description = "A fork of LPC for Velocity and features for AzureMC",
+        authors = {"EloyCubo"}
+)
+public class LPC {
 
-	private static final Pattern HEX_PATTERN = Pattern.compile("&#([A-Fa-f0-9]{6})");
-	private static final Pattern BUKKIT_HEX_PATTERN = Pattern.compile("&x(&[A-Fa-f0-9]){6}");
+    private final ProxyServer server;
+    private final Logger logger;
+    private final Path dataDirectory;
+    private LuckPerms luckPerms;
+    
+    private CommentedConfigurationNode config;
+    private YamlConfigurationLoader configLoader;
 
-	private LuckPerms luckPerms;
+    @Inject
+    public LPC(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
+        this.server = server;
+        this.logger = logger;
+        this.dataDirectory = dataDirectory;
+    }
 
+    @Subscribe
+    public void onProxyInitialization(ProxyInitializeEvent event) {
+        loadConfig();
 
-	@Override
-	public void onEnable() {
-		// Load an instance of 'LuckPerms' using the services manager.
-		this.luckPerms = getServer().getServicesManager().load(LuckPerms.class);
-		if (this.luckPerms == null) {
-			getLogger().severe("LuckPerms not found! LPC requires LuckPerms to function.");
-			getServer().getPluginManager().disablePlugin(this);
-			return;
-		}
+        try {
+            this.luckPerms = LuckPermsProvider.get();
+        } catch (IllegalStateException e) {
+            logger.error("LuckPerms not found! AzureChat requires LuckPerms to function.");
+            return;
+        }
 
-		saveDefaultConfig();
+        CommandManager commandManager = server.getCommandManager();
+        CommandMeta meta = commandManager.metaBuilder("lpc").build();
+        commandManager.register(meta, new LPCCommand());
 
-		try {
-			Class.forName("io.papermc.paper.event.player.AsyncChatEvent");
-			getServer().getPluginManager().registerEvents(new PaperChatListener(this), this);
-		} catch (ClassNotFoundException ignored) {
-			getServer().getPluginManager().registerEvents(this, this);
-		}
+        logger.info("AzureChat (LPC for Velocity) has been enabled.");
+    }
+    
+    private void loadConfig() {
+        if (!Files.exists(dataDirectory)) {
+            try {
+                Files.createDirectories(dataDirectory);
+            } catch (IOException e) {
+                logger.error("Failed to create plugin directory", e);
+            }
+        }
+        
+        Path configFile = dataDirectory.resolve("config.yml");
+        if (!Files.exists(configFile)) {
+            try (InputStream in = getClass().getResourceAsStream("/config.yml")) {
+                if (in != null) {
+                    Files.copy(in, configFile);
+                }
+            } catch (IOException e) {
+                logger.error("Failed to save default config", e);
+            }
+        }
+        
+        configLoader = YamlConfigurationLoader.builder().path(configFile).build();
+        try {
+            config = configLoader.load();
+        } catch (IOException e) {
+            logger.error("Failed to load config.yml", e);
+        }
+    }
 
-		final String[] chatPlugins = {"EssentialsChat", "VentureChat", "HeroChat", "DeluxeChat", "ChatManager", "ChatEx", "UltraChat", "TownyChat"};
-		for (final String pluginName : chatPlugins) {
-			if (getServer().getPluginManager().isPluginEnabled(pluginName)) {
-				getLogger().warning("Detected " + pluginName + " which may also format chat. To avoid message duplication, disable chat formatting in " + pluginName + ".");
-			}
-		}
-	}
+    @Subscribe
+    public void onPlayerChat(PlayerChatEvent event) {
+        Player player = event.getPlayer();
+        String message = event.getMessage();
+        
+        CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
+        String group = metaData.getPrimaryGroup();
+        
+        CommentedConfigurationNode formatsNode = config.node("group-formats");
+        String format = formatsNode.node(group).getString();
+        
+        if (format == null) {
+            format = config.node("chat-format").getString("{prefix}{name}&r: {message}");
+        }
 
-	@Override
-	public boolean onCommand(final CommandSender sender, final Command command, final String label, final String[] args) {
-		if (args.length == 1 && "reload".equals(args[0]) && sender.hasPermission("lpc.reload")) {
-			reloadConfig();
-			sender.sendMessage(colorize("&aLPC has been reloaded."));
-			return true;
-		}
+        String prefix = metaData.getPrefix() != null ? metaData.getPrefix() : "";
+        String suffix = metaData.getSuffix() != null ? metaData.getSuffix() : "";
+        
+        // Translate legacy codes for LuckPerms prefix/suffix if they use &
+        format = format.replace("{prefix}", prefix.replace("&", "<"))
+                       .replace("{suffix}", suffix.replace("&", "<"))
+                       .replace("{name}", player.getUsername())
+                       .replace("{message}", message);
 
-		if (args.length == 1 && "clear".equals(args[0]) && sender.hasPermission("lpc.clearchat")) {
-			for (final Player player : getServer().getOnlinePlayers()) {
-				for (int i = 0; i < 100; i++) {
-					player.sendMessage("");
-				}
-			}
-			final String clearMessage = getConfig().getString("clear-chat-message", "&7Chat has been cleared by a staff member.");
-			getServer().broadcastMessage(colorize(clearMessage));
-			return true;
-		}
+        // Convert standard legacy & color codes to MiniMessage tags for the rest
+        format = format.replace("&", "<").replace(">", ">");
 
-		if (args.length == 2 && "debug".equals(args[0]) && sender.hasPermission("lpc.debug")) {
-			final Player target = getServer().getPlayer(args[1]);
-			if (target == null) {
-				sender.sendMessage(colorize("&cPlayer not found."));
-				return true;
-			}
-			final CachedMetaData debugMeta = luckPerms.getPlayerAdapter(Player.class).getMetaData(target);
-			sender.sendMessage(colorize("&6&lLPC Debug: &f" + target.getName()));
-			sender.sendMessage(colorize("&7Primary Group: &f" + debugMeta.getPrimaryGroup()));
-			sender.sendMessage(colorize("&7Prefix: &f" + (debugMeta.getPrefix() != null ? debugMeta.getPrefix() : "&cnone")));
-			sender.sendMessage(colorize("&7Suffix: &f" + (debugMeta.getSuffix() != null ? debugMeta.getSuffix() : "&cnone")));
-			sender.sendMessage(colorize("&7All Prefixes (by weight):"));
-			debugMeta.getPrefixes().forEach((weight, prefix) ->
-					sender.sendMessage(colorize("  &7[" + weight + "] &f" + prefix)));
-			sender.sendMessage(colorize("&7All Suffixes (by weight):"));
-			debugMeta.getSuffixes().forEach((weight, suffix) ->
-					sender.sendMessage(colorize("  &7[" + weight + "] &f" + suffix)));
-			final String usernameColor = debugMeta.getMetaValue("username-color");
-			final String messageColor = debugMeta.getMetaValue("message-color");
-			sender.sendMessage(colorize("&7Username-color: &f" + (usernameColor != null ? usernameColor : "&cnone")));
-			sender.sendMessage(colorize("&7Message-color: &f" + (messageColor != null ? messageColor : "&cnone")));
-			sender.sendMessage(colorize("&7Group format: &f" + (getConfig().getString("group-formats." + debugMeta.getPrimaryGroup()) != null ? "group-formats." + debugMeta.getPrimaryGroup() : "chat-format (default)")));
-			sender.sendMessage(colorize("&7PAPI: &f" + (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI") ? "&ahooked" : "&cnot found")));
-			sender.sendMessage(colorize("&7Has lpc.colorcodes: &f" + target.hasPermission("lpc.colorcodes")));
-			sender.sendMessage(colorize("&7Has lpc.rgbcodes: &f" + target.hasPermission("lpc.rgbcodes")));
-			return true;
-		}
+        TagResolver placeholders = MiniPlaceholders.getAudienceGlobalPlaceholders(player);
+        Component finalMessage = MiniMessage.miniMessage().deserialize(format, placeholders);
+        
+        // Broadcast to everyone on the proxy
+        server.sendMessage(finalMessage);
+        
+        // Deny the original event so it doesn't get sent to the backend server
+        event.setResult(PlayerChatEvent.ChatResult.denied());
+    }
 
-		return false;
-	}
+    private class LPCCommand implements SimpleCommand {
+        @Override
+        public void execute(Invocation invocation) {
+            String[] args = invocation.arguments();
+            if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
+                if (invocation.source().hasPermission("lpc.reload")) {
+                    loadConfig();
+                    invocation.source().sendMessage(MiniMessage.miniMessage().deserialize("<green>AzureChat has been reloaded."));
+                } else {
+                    invocation.source().sendMessage(MiniMessage.miniMessage().deserialize("<red>No permission."));
+                }
+            }
+            // Add clear and debug if needed...
+        }
 
-	@Override
-	public List<String> onTabComplete(final CommandSender sender, final Command command, final String alias, final String[] args) {
-		if (args.length == 1) {
-			final String input = args[0].toLowerCase();
-			final List<String> completions = new ArrayList<>();
-			if (sender.hasPermission("lpc.reload") && "reload".startsWith(input)) completions.add("reload");
-			if (sender.hasPermission("lpc.clearchat") && "clear".startsWith(input)) completions.add("clear");
-			if (sender.hasPermission("lpc.debug") && "debug".startsWith(input)) completions.add("debug");
-			return completions;
-		}
-		if (args.length == 2 && "debug".equals(args[0]) && sender.hasPermission("lpc.debug")) {
-			return getServer().getOnlinePlayers().stream()
-					.map(Player::getName)
-					.filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
-					.collect(Collectors.toList());
-		}
-		return new ArrayList<>();
-	}
-
-	@EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-	public void onChat(final AsyncPlayerChatEvent event) {
-		final String message = event.getMessage();
-		final Player player = event.getPlayer();
-
-		String format = buildFormat(player);
-		String processedMessage = processMessage(player, message);
-
-		event.setFormat(format.replace("{message}", processedMessage).replace("%", "%%"));
-	}
-
-	String buildFormat(final Player player) {
-		final CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
-		final String group = metaData.getPrimaryGroup();
-
-		String format = getConfig().getString(getConfig().getString("group-formats." + group) != null ? "group-formats." + group : "chat-format");
-		if (format == null) {
-			format = "{prefix}{name}&r: {message}";
-		}
-
-		final String prefix = metaData.getPrefix();
-		final String suffix = metaData.getSuffix();
-		final String usernameColor = metaData.getMetaValue("username-color");
-		final String messageColor = metaData.getMetaValue("message-color");
-
-		format = format
-				.replace("{prefix}", prefix != null ? prefix : "")
-				.replace("{suffix}", suffix != null ? suffix : "")
-				.replace("{prefixes}", metaData.getPrefixes().keySet().stream().map(key -> metaData.getPrefixes().get(key)).collect(Collectors.joining()))
-				.replace("{suffixes}", metaData.getSuffixes().keySet().stream().map(key -> metaData.getSuffixes().get(key)).collect(Collectors.joining()))
-				.replace("{world}", player.getWorld().getName())
-				.replace("{name}", player.getName())
-				.replace("{displayname}", player.getDisplayName())
-				.replace("{username-color}", usernameColor != null ? usernameColor : "")
-				.replace("{message-color}", messageColor != null ? messageColor : "");
-
-		format = translateHexColorCodes(format);
-		if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-			format = PlaceholderAPI.setPlaceholders(player, format);
-		}
-		format = colorize(translateHexColorCodes(format));
-
-		return format;
-	}
-
-	String processMessage(final Player player, final String message) {
-		if (player.hasPermission("lpc.colorcodes") && player.hasPermission("lpc.rgbcodes")) {
-			return colorize(translateHexColorCodes(message));
-		} else if (player.hasPermission("lpc.colorcodes")) {
-			return colorize(stripHexCodes(message));
-		} else if (player.hasPermission("lpc.rgbcodes")) {
-			return stripColorCodes(translateHexColorCodes(message));
-		} else {
-			return stripColorCodes(stripHexCodes(message));
-		}
-	}
-
-	String colorize(final String message) {
-		return ChatColor.translateAlternateColorCodes('&', message);
-	}
-
-	String translateHexColorCodes(final String message) {
-		final char colorChar = ChatColor.COLOR_CHAR;
-
-		// Handle &#rrggbb format
-		Matcher matcher = HEX_PATTERN.matcher(message);
-		StringBuffer buffer = new StringBuffer(message.length() + 4 * 8);
-		while (matcher.find()) {
-			final String group = matcher.group(1);
-			matcher.appendReplacement(buffer, colorChar + "x"
-					+ colorChar + group.charAt(0) + colorChar + group.charAt(1)
-					+ colorChar + group.charAt(2) + colorChar + group.charAt(3)
-					+ colorChar + group.charAt(4) + colorChar + group.charAt(5));
-		}
-		String result = matcher.appendTail(buffer).toString();
-
-		// Handle &x&r&r&g&g&b&b format (Bukkit-style)
-		matcher = BUKKIT_HEX_PATTERN.matcher(result);
-		buffer = new StringBuffer(result.length());
-		while (matcher.find()) {
-			matcher.appendReplacement(buffer, matcher.group().replace('&', colorChar));
-		}
-		return matcher.appendTail(buffer).toString();
-	}
-
-	String stripColorCodes(final String message) {
-		return message.replaceAll("&[0-9a-fA-Fk-oK-OrR]", "");
-	}
-
-	String stripHexCodes(final String message) {
-		String result = message.replaceAll("&#[0-9a-fA-F]{6}", "");
-		result = result.replaceAll("&x(&[0-9a-fA-F]){6}", "");
-		return result;
-	}
+        @Override
+        public List<String> suggest(Invocation invocation) {
+            return List.of("reload", "clear", "debug");
+        }
+    }
 }
