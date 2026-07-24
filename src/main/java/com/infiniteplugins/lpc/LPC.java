@@ -29,13 +29,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-@Plugin(
-        id = "lpc",
-        name = "AzureChat",
-        version = "3.7.2",
-        description = "A fork of LPC for Velocity and features for AzureMC",
-        authors = {"EloyCubo"}
-)
 public class LPC {
 
     private final ProxyServer server;

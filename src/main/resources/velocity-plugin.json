@@ -1,0 +1,20 @@
+{
+  "id": "lpc",
+  "name": "${project.name}",
+  "version": "${project.version}",
+  "description": "${project.description}",
+  "authors": [
+    "${author}"
+  ],
+  "main": "${main.class}",
+  "dependencies": [
+    {
+      "id": "luckperms",
+      "optional": false
+    },
+    {
+      "id": "miniplaceholders",
+      "optional": true
+    }
+  ]
+}
