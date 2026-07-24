@@ -58,7 +58,7 @@ public class LPC {
         }
 
         CommandManager commandManager = server.getCommandManager();
-        CommandMeta meta = commandManager.metaBuilder("lpc").build();
+        CommandMeta meta = commandManager.metaBuilder("azurechat").build();
         commandManager.register(meta, new LPCCommand());
 
         logger.info("AzureChat (LPC for Velocity) has been enabled.");
@@ -134,7 +134,7 @@ public class LPC {
         public void execute(Invocation invocation) {
             String[] args = invocation.arguments();
             if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
-                if (invocation.source().hasPermission("lpc.reload")) {
+                if (invocation.source().hasPermission("azurechat.reload")) {
                     loadConfig();
                     invocation.source().sendMessage(MiniMessage.miniMessage().deserialize("<green>AzureChat has been reloaded."));
                 } else {
