@@ -5,12 +5,16 @@ import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
+import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import io.github.miniplaceholders.api.MiniPlaceholders;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -28,9 +32,19 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class LPC {
+
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.builder()
+            .character('&')
+            .hexColors()
+            .build();
 
     private final ProxyServer server;
     private final Logger logger;
@@ -39,6 +53,10 @@ public class LPC {
 
     private CommentedConfigurationNode config;
     private YamlConfigurationLoader configLoader;
+
+    // Tracks which backend server each player was last known to be on,
+    // so we can send the correct "leave" message when they disconnect from the proxy entirely.
+    private final Map<UUID, RegisteredServer> lastKnownServer = new ConcurrentHashMap<>();
 
     @Inject
     public LPC(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -93,6 +111,53 @@ public class LPC {
         }
     }
 
+    // ----------------------------------------------------------------------------
+    // Shared placeholder resolution, used by chat AND join/leave messages
+    // ----------------------------------------------------------------------------
+    private String resolvePlaceholders(String format, Player player, CachedMetaData metaData,
+                                        String serverName, String message) {
+        String prefix = metaData.getPrefix() != null ? metaData.getPrefix() : "";
+        String suffix = metaData.getSuffix() != null ? metaData.getSuffix() : "";
+
+        String prefixes = metaData.getPrefixes().values().stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(""));
+        String suffixes = metaData.getSuffixes().values().stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining(""));
+
+        String usernameColor = metaData.getMetaValue("username-color");
+        String messageColor = metaData.getMetaValue("message-color");
+
+        String result = format
+                .replace("{prefix}", prefix)
+                .replace("{suffix}", suffix)
+                .replace("{prefixes}", prefixes)
+                .replace("{suffixes}", suffixes)
+                .replace("{username-color}", usernameColor != null ? usernameColor : "")
+                .replace("{message-color}", messageColor != null ? messageColor : "")
+                .replace("{name}", player.getUsername())
+                // Velocity has no native nickname/displayname system; falls back to username.
+                .replace("{displayname}", player.getUsername())
+                // Velocity has no concept of Minecraft "worlds"; use the backend server name instead.
+                .replace("{world}", serverName != null ? serverName : "");
+
+        if (message != null) {
+            result = result.replace("{message}", message);
+        }
+
+        return result;
+    }
+
+    private void broadcastToServer(RegisteredServer target, Component message) {
+        for (Player p : target.getPlayersConnected()) {
+            p.sendMessage(message);
+        }
+    }
+
+    // ----------------------------------------------------------------------------
+    // Chat: now scoped per-server instead of proxy-wide
+    // ----------------------------------------------------------------------------
     @Subscribe
     public void onPlayerChat(PlayerChatEvent event) {
         Player player = event.getPlayer();
@@ -108,26 +173,80 @@ public class LPC {
             format = config.node("chat-format").getString("{prefix}{name}&r: {message}");
         }
 
-        String prefix = metaData.getPrefix() != null ? metaData.getPrefix() : "";
-        String suffix = metaData.getSuffix() != null ? metaData.getSuffix() : "";
+        Optional<ServerConnection> currentServer = player.getCurrentServer();
+        String serverName = currentServer.map(sc -> sc.getServerInfo().getName()).orElse(null);
 
-        format = format.replace("{prefix}", prefix)
-                       .replace("{suffix}", suffix)
-                       .replace("{name}", player.getUsername())
-                       .replace("{message}", message);
+        String resolved = resolvePlaceholders(format, player, metaData, serverName, message);
+        Component finalMessage = LEGACY.deserialize(resolved);
 
-        // Convierte TODO (incluyendo &#hexcolor) de legacy a Component directamente.
-        LegacyComponentSerializer legacy = LegacyComponentSerializer.builder()
-                .character('&')
-                .hexColors()
-                .build();
+        boolean perServerChat = config.node("per-server-chat").getBoolean(true);
 
-        Component finalMessage = legacy.deserialize(format);
-
-        server.sendMessage(finalMessage);
+        if (perServerChat && currentServer.isPresent()) {
+            broadcastToServer(currentServer.get().getServer(), finalMessage);
+        } else {
+            // Fallback: proxy-wide broadcast (old behavior), used if per-server-chat is disabled
+            // or the player isn't connected to any backend server yet.
+            server.getAllPlayers().forEach(p -> p.sendMessage(finalMessage));
+        }
 
         // Deny the original event so it doesn't get sent to the backend server
         event.setResult(PlayerChatEvent.ChatResult.denied());
+    }
+
+    // ----------------------------------------------------------------------------
+    // Join / Leave messages, configurable per backend server
+    // ----------------------------------------------------------------------------
+    private void sendServerLifecycleMessage(RegisteredServer targetServer, Player player, String type) {
+        String serverName = targetServer.getServerInfo().getName();
+
+        CommentedConfigurationNode serverMessages = config.node("server-messages");
+        CommentedConfigurationNode serverNode = serverMessages.node("servers", serverName);
+        CommentedConfigurationNode defaultNode = serverMessages.node("default");
+
+        boolean enabled = serverNode.node(type + "-enabled")
+                .getBoolean(defaultNode.node(type + "-enabled").getBoolean(false));
+
+        if (!enabled) {
+            return;
+        }
+
+        String message = serverNode.node(type + "-message").getString(
+                defaultNode.node(type + "-message").getString(""));
+
+        if (message == null || message.isEmpty()) {
+            return;
+        }
+
+        CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
+        String resolved = resolvePlaceholders(message, player, metaData, serverName, null);
+        Component finalMessage = LEGACY.deserialize(resolved);
+
+        broadcastToServer(targetServer, finalMessage);
+    }
+
+    @Subscribe
+    public void onServerConnected(ServerConnectedEvent event) {
+        Player player = event.getPlayer();
+        RegisteredServer newServer = event.getServer();
+        Optional<RegisteredServer> previousServer = event.getPreviousServer();
+
+        // Player switched from one backend server to another: leave message on the old one.
+        previousServer.ifPresent(prev -> sendServerLifecycleMessage(prev, player, "leave"));
+
+        // Join message on the new one (also covers the very first connection to the proxy).
+        sendServerLifecycleMessage(newServer, player, "join");
+
+        lastKnownServer.put(player.getUniqueId(), newServer);
+    }
+
+    @Subscribe
+    public void onDisconnect(DisconnectEvent event) {
+        Player player = event.getPlayer();
+        RegisteredServer lastServer = lastKnownServer.remove(player.getUniqueId());
+
+        if (lastServer != null) {
+            sendServerLifecycleMessage(lastServer, player, "leave");
+        }
     }
 
     private class LPCCommand implements SimpleCommand {

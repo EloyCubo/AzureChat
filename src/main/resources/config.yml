@@ -4,14 +4,14 @@
 # Placeholders:
 # {message} - the chat message
 # {name} - the player's name
-# {displayname} - the player's display name / nickname
-# {world} - the world name of the player's current world
+# {displayname} - the player's display name / nickname (falls back to {name} on Velocity)
+# {world} - the backend server the player is currently on (Velocity has no concept of worlds)
 # {prefix} - the player's highest priority prefix
 # {suffix} - the player's highest priority suffix
 # {prefixes} - the player's prefixes sorted by the highest priority
 # {suffixes} - the player's suffixes sorted by the highest priority
-# {username-color} - the player's or the group's username color
-# {message-color} - the player's or the group's message color
+# {username-color} - the player's or the group's username color (LuckPerms meta key "username-color")
+# {message-color} - the player's or the group's message color (LuckPerms meta key "message-color")
 #
 # Color codes: Use & for colors (&a, &b, etc.) and &#rrggbb for hex colors.
 # Permissions: lpc.reload, lpc.clearchat, lpc.debug, lpc.colorcodes, lpc.rgbcodes
@@ -36,5 +36,34 @@ group-formats:
 #  default: "{prefix}{name}&r: {message}"
 #  admin: "&c[Admin] {prefix}{name}&r: {message}"
 
+# If true (recommended), chat messages are only broadcast to players on the
+# SAME backend server as the sender. If false, chat is broadcast to the whole proxy.
+per-server-chat: true
+
 # Message shown after /lpc clear
 clear-chat-message: "&7Chat has been cleared by a staff member."
+
+# Join / Leave messages, sent only to players on the specific backend server
+# (not proxy-wide). Uses the same placeholders as chat-format above
+# ({message} is not available here since there's no chat message involved).
+#
+# "default" applies to any server not explicitly listed under "servers".
+# Add one entry per server name (must match your velocity.toml server names)
+# under "servers" to override join-enabled/leave-enabled/messages for it.
+server-messages:
+  default:
+    join-enabled: false
+    leave-enabled: false
+    join-message: "&a{name} has joined the server."
+    leave-message: "&c{name} has left the server."
+  servers:
+    lobby:
+      join-enabled: true
+      leave-enabled: true
+      join-message: "&a{name} has joined the server."
+      leave-message: "&c{name} has left the server."
+#    survival:
+#      join-enabled: true
+#      leave-enabled: true
+#      join-message: "&a{prefix}{name} &ahas joined Survival!"
+#      leave-message: "&c{prefix}{name} &chas left Survival."
