@@ -15,6 +15,7 @@ import io.github.miniplaceholders.api.MiniPlaceholders;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.cacheddata.CachedMetaData;
@@ -35,7 +36,7 @@ public class LPC {
     private final Logger logger;
     private final Path dataDirectory;
     private LuckPerms luckPerms;
-    
+
     private CommentedConfigurationNode config;
     private YamlConfigurationLoader configLoader;
 
@@ -63,7 +64,7 @@ public class LPC {
 
         logger.info("AzureChat (LPC for Velocity) has been enabled.");
     }
-    
+
     private void loadConfig() {
         if (!Files.exists(dataDirectory)) {
             try {
@@ -72,7 +73,7 @@ public class LPC {
                 logger.error("Failed to create plugin directory", e);
             }
         }
-        
+
         Path configFile = dataDirectory.resolve("config.yml");
         if (!Files.exists(configFile)) {
             try (InputStream in = getClass().getResourceAsStream("/config.yml")) {
@@ -83,7 +84,7 @@ public class LPC {
                 logger.error("Failed to save default config", e);
             }
         }
-        
+
         configLoader = YamlConfigurationLoader.builder().path(configFile).build();
         try {
             config = configLoader.load();
@@ -96,35 +97,35 @@ public class LPC {
     public void onPlayerChat(PlayerChatEvent event) {
         Player player = event.getPlayer();
         String message = event.getMessage();
-        
+
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
         String group = metaData.getPrimaryGroup();
-        
+
         CommentedConfigurationNode formatsNode = config.node("group-formats");
         String format = formatsNode.node(group).getString();
-        
+
         if (format == null) {
             format = config.node("chat-format").getString("{prefix}{name}&r: {message}");
         }
 
         String prefix = metaData.getPrefix() != null ? metaData.getPrefix() : "";
         String suffix = metaData.getSuffix() != null ? metaData.getSuffix() : "";
-        
-        // Translate legacy codes for LuckPerms prefix/suffix if they use &
-        format = format.replace("{prefix}", prefix.replace("&", "<"))
-                       .replace("{suffix}", suffix.replace("&", "<"))
+
+        format = format.replace("{prefix}", prefix)
+                       .replace("{suffix}", suffix)
                        .replace("{name}", player.getUsername())
                        .replace("{message}", message);
 
-        // Convert standard legacy & color codes to MiniMessage tags for the rest
-        format = format.replace("&", "<").replace(">", ">");
+        // Convierte TODO (incluyendo &#hexcolor) de legacy a Component directamente.
+        LegacyComponentSerializer legacy = LegacyComponentSerializer.builder()
+                .character('&')
+                .hexColors()
+                .build();
 
-        TagResolver placeholders = MiniPlaceholders.audiencePlaceholders();
-        Component finalMessage = MiniMessage.miniMessage().deserialize(format, player, placeholders);
-        
-        // Broadcast to everyone on the proxy
+        Component finalMessage = legacy.deserialize(format);
+
         server.sendMessage(finalMessage);
-        
+
         // Deny the original event so it doesn't get sent to the backend server
         event.setResult(PlayerChatEvent.ChatResult.denied());
     }
