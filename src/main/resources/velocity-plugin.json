@@ -1,5 +1,5 @@
 {
-  "id": "lpc",
+  "id": "azurechat",
   "name": "${project.name}",
   "version": "${project.version}",
   "description": "${project.description}",
