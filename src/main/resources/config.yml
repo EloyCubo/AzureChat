@@ -23,22 +23,29 @@
 #
 # More information: https://www.spigotmc.org/resources/68965
 
-chat-format: "{prefix}{name}&r: {message}"
-
-# Examples:
-# chat-format: "[{world}] {prefix}{name}&r: {message}"
-# chat-format: "{prefix}{name}{suffix}&r: {message}"
-# chat-format: "{prefix}{username-color}{name}&r: {message-color}{message}"
-
-# Per-group chat format. Overrides chat-format for the specified group.
-# YAML note: group names must be indented with exactly 2 spaces.
-group-formats:
-#  default: "{prefix}{name}&r: {message}"
-#  admin: "&c[Admin] {prefix}{name}&r: {message}"
-
 # If true (recommended), chat messages are only broadcast to players on the
 # SAME backend server as the sender. If false, chat is broadcast to the whole proxy.
 per-server-chat: true
+
+# Optional per-server chat format support.
+# "default" applies to any server not explicitly listed under "servers".
+# If a server-specific format is missing, it falls back to the default node.
+server-chat-formats:
+  default:
+    chat-format: "{prefix}{name}&r: {message}"
+    # group-formats:
+    #   default: "{prefix}{name}&r: {message}"
+    #   admin: "&c[Admin] {prefix}{name}&r: {message}"
+  servers:
+    lobby:
+      chat-format: "[Lobby] {prefix}{name}&r: {message}"
+      # group-formats:
+      #   default: "{prefix}{name}&r: {message}"
+      #   admin: "&c[Admin] {prefix}{name}&r: {message}"
+
+# Delay for join messages in milliseconds. This helps the joining player
+# see the message that other players receive when they connect.
+join-message-delay-ms: 500
 
 # Message shown after /lpc clear
 clear-chat-message: "&7Chat has been cleared by a staff member."

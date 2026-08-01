@@ -37,6 +37,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class LPC {
@@ -149,6 +150,31 @@ public class LPC {
         return result;
     }
 
+    private String getChatFormat(String group, String serverName) {
+        CommentedConfigurationNode serverChatFormats = config.node("server-chat-formats");
+        CommentedConfigurationNode serverNode = serverChatFormats.node("servers", serverName != null ? serverName : "");
+        CommentedConfigurationNode defaultNode = serverChatFormats.node("default");
+
+        if (serverName != null) {
+            String format = serverNode.node("group-formats", group).getString(null);
+            if (format != null) {
+                return format;
+            }
+
+            format = serverNode.node("chat-format").getString(null);
+            if (format != null) {
+                return format;
+            }
+        }
+
+        String format = defaultNode.node("group-formats", group).getString(null);
+        if (format != null) {
+            return format;
+        }
+
+        return defaultNode.node("chat-format").getString("{prefix}{name}&r: {message}");
+    }
+
     private void broadcastToServer(RegisteredServer target, Component message) {
         for (Player p : target.getPlayersConnected()) {
             p.sendMessage(message);
@@ -166,16 +192,10 @@ public class LPC {
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
         String group = metaData.getPrimaryGroup();
 
-        CommentedConfigurationNode formatsNode = config.node("group-formats");
-        String format = formatsNode.node(group).getString();
-
-        if (format == null) {
-            format = config.node("chat-format").getString("{prefix}{name}&r: {message}");
-        }
-
         Optional<ServerConnection> currentServer = player.getCurrentServer();
         String serverName = currentServer.map(sc -> sc.getServerInfo().getName()).orElse(null);
 
+        String format = getChatFormat(group, serverName);
         String resolved = resolvePlaceholders(format, player, metaData, serverName, message);
         Component finalMessage = LEGACY.deserialize(resolved);
 
@@ -233,8 +253,13 @@ public class LPC {
         // Player switched from one backend server to another: leave message on the old one.
         previousServer.ifPresent(prev -> sendServerLifecycleMessage(prev, player, "leave"));
 
-        // Join message on the new one (also covers the very first connection to the proxy).
-        sendServerLifecycleMessage(newServer, player, "join");
+        long joinDelay = Math.max(0, config.node("join-message-delay-ms").getLong(500));
+        server.getScheduler().buildTask(this, () -> {
+            Optional<ServerConnection> current = player.getCurrentServer();
+            if (current.isPresent() && current.get().getServer().equals(newServer)) {
+                sendServerLifecycleMessage(newServer, player, "join");
+            }
+        }).delay(joinDelay, TimeUnit.MILLISECONDS).schedule();
 
         lastKnownServer.put(player.getUniqueId(), newServer);
     }
