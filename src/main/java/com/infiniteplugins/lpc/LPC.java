@@ -156,18 +156,18 @@ public class LPC {
         CommentedConfigurationNode defaultNode = serverChatFormats.node("default");
 
         if (serverName != null) {
-            String format = serverNode.node("group-formats", group).getString(null);
+            String format = serverNode.node("group-formats", group).getString();
             if (format != null) {
                 return format;
             }
 
-            format = serverNode.node("chat-format").getString(null);
+            format = serverNode.node("chat-format").getString();
             if (format != null) {
                 return format;
             }
         }
 
-        String format = defaultNode.node("group-formats", group).getString(null);
+        String format = defaultNode.node("group-formats", group).getString();
         if (format != null) {
             return format;
         }
