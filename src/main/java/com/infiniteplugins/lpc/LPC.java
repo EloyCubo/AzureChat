@@ -15,9 +15,9 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import com.velocitypowered.api.network.ChannelIdentifier;
-import io.github.miniplaceholders.api.MiniPlaceholders;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
@@ -29,8 +29,8 @@ import org.slf4j.Logger;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
-import java.io.IOException;
 import java.io.InputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -64,7 +64,7 @@ public class LPC {
     private LuckPerms luckPerms;
 
     // Plugin messaging channel for placeholder requests/responses
-    private static final ChannelIdentifier PLACEHOLDERS_CHANNEL = ChannelIdentifier.create("azurechat", "placeholders");
+    private static final ChannelIdentifier PLACEHOLDERS_CHANNEL = MinecraftChannelIdentifier.create("azurechat", "placeholders");
 
     private final AtomicLong requestCounter = new AtomicLong(0);
     private final Map<Long, CompletableFuture<String>> pendingPlaceholderResponses = new ConcurrentHashMap<>();
