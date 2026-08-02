@@ -99,6 +99,7 @@ public class LPC {
         CommandMeta meta = commandManager.metaBuilder("azurechat").build();
         commandManager.register(meta, new LPCCommand());
 
+        server.getChannelRegistrar().register(PLACEHOLDERS_CHANNEL);
         logger.info("AzureChat (LPC for Velocity) has been enabled.");
     }
 
@@ -236,10 +237,16 @@ public class LPC {
                 out.writeLong(requestId);
                 out.writeUTF(player.getUniqueId().toString());
                 out.writeUTF(resolved);
-                conn.sendPluginMessage(PLACEHOLDERS_CHANNEL, bout.toByteArray());
+                boolean success = conn.sendPluginMessage(PLACEHOLDERS_CHANNEL, bout.toByteArray());
+                if (!success) {
+                    logger.warn("Failed to send placeholder request to backend: plugin message not accepted.");
+                    pendingPlaceholderResponses.remove(requestId);
+                    future.complete(resolved);
+                }
             } catch (IOException e) {
                 logger.warn("Failed to send placeholder request to backend: " + e.getMessage());
                 pendingPlaceholderResponses.remove(requestId);
+                future.complete(resolved);
             }
 
             // Timeout handling: complete with original text if backend doesn't respond.
