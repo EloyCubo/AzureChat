@@ -27,6 +27,10 @@
 # SAME backend server as the sender. If false, chat is broadcast to the whole proxy.
 per-server-chat: true
 
+# How long to wait (ms) for a backend Paper server to resolve PlaceholderAPI
+# requests before falling back to the original text. Adjust as needed.
+placeholder-timeout-ms: 2000
+
 # Optional per-server chat format support.
 # "default" applies to any server not explicitly listed under "servers".
 # If a server-specific format is missing, it falls back to the default node.

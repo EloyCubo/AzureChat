@@ -6,6 +6,7 @@ import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -15,6 +16,7 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.network.ChannelIdentifier;
 import io.github.miniplaceholders.api.MiniPlaceholders;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -37,8 +39,17 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.IOException;
 
 public class LPC {
 
@@ -51,6 +62,13 @@ public class LPC {
     private final Logger logger;
     private final Path dataDirectory;
     private LuckPerms luckPerms;
+
+    // Plugin messaging channel for placeholder requests/responses
+    private static final ChannelIdentifier PLACEHOLDERS_CHANNEL = ChannelIdentifier.create("azurechat", "placeholders");
+
+    private final AtomicLong requestCounter = new AtomicLong(0);
+    private final Map<Long, CompletableFuture<String>> pendingPlaceholderResponses = new ConcurrentHashMap<>();
+    private final Pattern placeholderPattern = Pattern.compile("%[^%]+%");
 
     private CommentedConfigurationNode config;
     private YamlConfigurationLoader configLoader;
@@ -201,7 +219,47 @@ public class LPC {
 
         boolean perServerChat = config.node("per-server-chat").getBoolean(true);
 
-        if (perServerChat && currentServer.isPresent()) {
+        // If running on Velocity and the message contains PlaceholderAPI-style placeholders
+        // forward them to the backend Paper server to be resolved there.
+        boolean containsPlaceholders = placeholderPattern.matcher(resolved).find();
+
+        if (perServerChat && currentServer.isPresent() && containsPlaceholders) {
+            // Asynchronously request placeholder resolution from the backend server.
+            ServerConnection conn = currentServer.get();
+
+            long requestId = requestCounter.incrementAndGet();
+            CompletableFuture<String> future = new CompletableFuture<>();
+            pendingPlaceholderResponses.put(requestId, future);
+
+            // Build request payload: [long requestId][utf playerUuid][utf text]
+            try (ByteArrayOutputStream bout = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bout)) {
+                out.writeLong(requestId);
+                out.writeUTF(player.getUniqueId().toString());
+                out.writeUTF(resolved);
+                conn.sendPluginMessage(PLACEHOLDERS_CHANNEL, bout.toByteArray());
+            } catch (IOException e) {
+                logger.warn("Failed to send placeholder request to backend: " + e.getMessage());
+                pendingPlaceholderResponses.remove(requestId);
+            }
+
+            // Timeout handling: complete with original text if backend doesn't respond.
+            long timeoutMs = config.node("placeholder-timeout-ms").getLong(2000);
+            server.getScheduler().buildTask(this, () -> {
+                CompletableFuture<String> f = pendingPlaceholderResponses.remove(requestId);
+                if (f != null && !f.isDone()) {
+                    f.complete(resolved);
+                }
+            }).delay(timeoutMs, TimeUnit.MILLISECONDS).schedule();
+
+            // When response arrives (or timeout), broadcast on proxy thread.
+            future.whenComplete((resolvedText, ex) -> {
+                String toUse = resolvedText != null ? resolvedText : resolved;
+                server.getScheduler().buildTask(this, () -> {
+                    Component msgComp = LEGACY.deserialize(toUse);
+                    broadcastToServer(conn.getServer(), msgComp);
+                }).schedule();
+            });
+        } else if (perServerChat && currentServer.isPresent()) {
             broadcastToServer(currentServer.get().getServer(), finalMessage);
         } else {
             // Fallback: proxy-wide broadcast (old behavior), used if per-server-chat is disabled
@@ -211,6 +269,24 @@ public class LPC {
 
         // Deny the original event so it doesn't get sent to the backend server
         event.setResult(PlayerChatEvent.ChatResult.denied());
+    }
+
+    @Subscribe
+    public void onPluginMessage(PluginMessageEvent event) {
+        if (!event.getIdentifier().equals(PLACEHOLDERS_CHANNEL)) return;
+
+        byte[] data = event.getData();
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
+            long requestId = in.readLong();
+            String resolved = in.readUTF();
+
+            CompletableFuture<String> f = pendingPlaceholderResponses.remove(requestId);
+            if (f != null) {
+                f.complete(resolved);
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to read placeholder response: " + e.getMessage());
+        }
     }
 
     // ----------------------------------------------------------------------------

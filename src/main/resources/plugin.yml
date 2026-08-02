@@ -1,0 +1,8 @@
+name: AzureChat
+main: com.infiniteplugins.lpc.paper.PaperBridge
+version: ${project.version}
+api-version: 1.13
+authors:
+  - ${author}
+depend: []
+softdepend: [PlaceholderAPI]
