@@ -61,6 +61,12 @@
 			<version>2.12.3</version>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+			<groupId>es.azuremc</groupId>
+			<artifactId>azurestaff</artifactId>
+			<version>1.0.0</version>
+			<scope>provided</scope>
+		</dependency>
 	</dependencies>
 	
 	<!-- DO NOT EDIT unless instructed to do so or you know what you're doing. -->

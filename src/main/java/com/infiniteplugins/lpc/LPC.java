@@ -11,7 +11,9 @@ import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.plugin.annotation.Dependency;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
@@ -31,6 +33,7 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -51,6 +54,12 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 
+@Plugin(
+        id = "azurechat",
+        name = "AzureChat",
+        version = "1.3.2",
+        dependencies = { @Dependency(id = "azurestaff") }
+)
 public class LPC {
 
     private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.builder()
@@ -200,12 +209,39 @@ public class LPC {
         }
     }
 
+    private boolean isAzureStaffMuted(Player player) {
+        Optional<PluginContainer> container = server.getPluginManager().getPlugin("azurestaff");
+        if (container.isEmpty()) {
+            return false;
+        }
+
+        Optional<?> instance = container.get().getInstance();
+        if (instance.isEmpty()) {
+            return false;
+        }
+
+        try {
+            Object api = instance.get();
+            Method isMuted = api.getClass().getMethod("isMuted", UUID.class);
+            Object result = isMuted.invoke(api, player.getUniqueId());
+            return Boolean.TRUE.equals(result);
+        } catch (ReflectiveOperationException e) {
+            logger.warn("AzureStaff API is available but could not be used to check mute status", e);
+            return false;
+        }
+    }
+
     // ----------------------------------------------------------------------------
     // Chat: now scoped per-server instead of proxy-wide
     // ----------------------------------------------------------------------------
     @Subscribe
     public void onPlayerChat(PlayerChatEvent event) {
         Player player = event.getPlayer();
+        if (isAzureStaffMuted(player)) {
+            event.setResult(PlayerChatEvent.ChatResult.denied());
+            return;
+        }
+
         String message = event.getMessage();
 
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
