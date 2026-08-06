@@ -13,7 +13,6 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
-import com.velocitypowered.api.plugin.annotation.Dependency;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
@@ -57,8 +56,7 @@ import java.io.IOException;
 @Plugin(
         id = "azurechat",
         name = "AzureChat",
-        version = "1.3.2",
-        dependencies = { @Dependency(id = "azurestaff") }
+        version = "1.3.2"
 )
 public class LPC {
 
