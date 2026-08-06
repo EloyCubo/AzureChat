@@ -61,12 +61,9 @@
 			<version>2.12.3</version>
 			<scope>provided</scope>
 		</dependency>
-		<dependency>
-			<groupId>es.azuremc</groupId>
-			<artifactId>azurestaff</artifactId>
-			<version>1.0.0</version>
-			<scope>provided</scope>
-		</dependency>
+		<!-- AzureStaff is provided by the Velocity runtime when the plugin is installed.
+		     The jar is not published in a public Maven repository, so we do not
+		     declare it here to keep the project buildable. -->
 	</dependencies>
 	
 	<!-- DO NOT EDIT unless instructed to do so or you know what you're doing. -->
