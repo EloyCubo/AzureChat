@@ -442,21 +442,15 @@ public class LPC {
     private class MsgCommand implements SimpleCommand {
         @Override
         public void execute(Invocation invocation) {
-            if (!(invocation.source() instanceof Player sender)) {
+            if (!(invocation.source() instanceof Player)) {
                 invocation.source().sendMessage(
                         MiniMessage.miniMessage().deserialize("<red>/msg can only be used by players.")
                 );
                 return;
             }
 
+            Player sender = (Player) invocation.source();
             boolean perServerChat = config.node("per-server-chat").getBoolean(true);
-            if (!perServerChat) {
-                sender.sendMessage(LEGACY.deserialize(
-                        getMsgFormat("disabled-message",
-                                "&c/msg is disabled because per-server-chat is disabled.")
-                ));
-                return;
-            }
 
             String[] args = invocation.arguments();
             if (args.length < 2) {
@@ -467,14 +461,19 @@ public class LPC {
             }
 
             Optional<ServerConnection> senderConnection = sender.getCurrentServer();
-            if (senderConnection.isEmpty()) {
+
+            // true = same backend only; false = anywhere on the Velocity network.
+            if (perServerChat && senderConnection.isEmpty()) {
                 sender.sendMessage(LEGACY.deserialize(
-                        getMsgFormat("no-server-message", "&cYou must be connected to a server to use /msg.")
+                        getMsgFormat("no-server-message",
+                                "&cYou must be connected to a server to use /msg.")
                 ));
                 return;
             }
 
-            RegisteredServer senderServer = senderConnection.get().getServer();
+            RegisteredServer senderServer = senderConnection
+                    .map(ServerConnection::getServer)
+                    .orElse(null);
 
             String targetName = args[0];
             Optional<Player> targetOptional = server.getPlayer(targetName);
@@ -489,8 +488,10 @@ public class LPC {
             Player target = targetOptional.get();
             Optional<ServerConnection> targetConnection = target.getCurrentServer();
 
-            if (targetConnection.isEmpty()
-                    || !targetConnection.get().getServer().equals(senderServer)) {
+            // Only enforce the backend restriction when per-server-chat is enabled.
+            if (perServerChat
+                    && (targetConnection.isEmpty()
+                    || !targetConnection.get().getServer().equals(senderServer))) {
                 sender.sendMessage(LEGACY.deserialize(
                         getMsgFormat("not-on-server-message",
                                 "&cThat player is not on your current server.")
@@ -498,7 +499,9 @@ public class LPC {
                 return;
             }
 
-            String message = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
+            String message = String.join(" ",
+                    java.util.Arrays.copyOfRange(args, 1, args.length));
+
             if (message.isBlank()) {
                 sender.sendMessage(LEGACY.deserialize(
                         getMsgFormat("usage", "&cUsage: /msg <player> <message>")
@@ -526,19 +529,32 @@ public class LPC {
         @Override
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
+
             if (args.length <= 1) {
-                if (!(invocation.source() instanceof Player sender)) {
+                if (!(invocation.source() instanceof Player)) {
                     return List.of();
                 }
 
-                Optional<ServerConnection> current = sender.getCurrentServer();
-                if (current.isEmpty()
-                        || !config.node("per-server-chat").getBoolean(true)) {
-                    return List.of();
-                }
-
+                Player sender = (Player) invocation.source();
+                boolean perServerChat = config.node("per-server-chat").getBoolean(true);
                 String prefix = args.length == 0 ? "" : args[0].toLowerCase();
-                return current.get().getServer().getPlayersConnected().stream()
+
+                if (perServerChat) {
+                    Optional<ServerConnection> current = sender.getCurrentServer();
+                    if (current.isEmpty()) {
+                        return List.of();
+                    }
+
+                    return current.get().getServer().getPlayersConnected().stream()
+                            .map(Player::getUsername)
+                            .filter(name -> !name.equalsIgnoreCase(sender.getUsername()))
+                            .filter(name -> name.toLowerCase().startsWith(prefix))
+                            .sorted(String.CASE_INSENSITIVE_ORDER)
+                            .collect(Collectors.toList());
+                }
+
+                // Network-wide suggestions when per-server-chat is disabled.
+                return server.getAllPlayers().stream()
                         .map(Player::getUsername)
                         .filter(name -> !name.equalsIgnoreCase(sender.getUsername()))
                         .filter(name -> name.toLowerCase().startsWith(prefix))
