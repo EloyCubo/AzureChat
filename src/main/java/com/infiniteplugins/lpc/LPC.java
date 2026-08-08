@@ -20,6 +20,7 @@ import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
@@ -105,6 +106,11 @@ public class LPC {
         CommandManager commandManager = server.getCommandManager();
         CommandMeta meta = commandManager.metaBuilder("azurechat").build();
         commandManager.register(meta, new LPCCommand());
+
+        CommandMeta msgMeta = commandManager.metaBuilder("msg")
+                .aliases("tell", "w", "whisper")
+                .build();
+        commandManager.register(msgMeta, new MsgCommand());
 
         server.getChannelRegistrar().register(PLACEHOLDERS_CHANNEL);
         logger.info("AzureChat (LPC for Velocity) has been enabled.");
@@ -388,6 +394,159 @@ public class LPC {
 
         if (lastServer != null) {
             sendServerLifecycleMessage(lastServer, player, "leave");
+        }
+    }
+
+
+    // ----------------------------------------------------------------------------
+    // Private messages (/msg): only available when per-server-chat is enabled.
+    // ----------------------------------------------------------------------------
+
+    private String getMsgFormat(String key, String fallback) {
+        return config.node("msg", key).getString(fallback);
+    }
+
+    private String resolveMsgPlaceholders(String format, Player sender, Player target, String message) {
+        return format
+                .replace("{sender}", sender.getUsername())
+                .replace("{sender-displayname}", sender.getUsername())
+                .replace("{receiver}", target.getUsername())
+                .replace("{receiver-displayname}", target.getUsername())
+                .replace("{message}", message);
+    }
+
+    private void playMsgSound(Player player) {
+        boolean enabled = config.node("msg", "sound", "enabled").getBoolean(true);
+        if (!enabled) {
+            return;
+        }
+
+        String soundName = config.node("msg", "sound", "sound")
+                .getString("minecraft:block.note_block.pling");
+        float volume = (float) config.node("msg", "sound", "volume").getDouble(1.0);
+        float pitch = (float) config.node("msg", "sound", "pitch").getDouble(1.0);
+
+        try {
+            Sound sound = Sound.sound(
+                    net.kyori.adventure.key.Key.key(soundName),
+                    Sound.Source.MASTER,
+                    volume,
+                    pitch
+            );
+            player.playSound(sound);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid /msg sound '{}'. Sound will not be played.", soundName);
+        }
+    }
+
+    private class MsgCommand implements SimpleCommand {
+        @Override
+        public void execute(Invocation invocation) {
+            if (!(invocation.source() instanceof Player sender)) {
+                invocation.source().sendMessage(
+                        MiniMessage.miniMessage().deserialize("<red>/msg can only be used by players.")
+                );
+                return;
+            }
+
+            boolean perServerChat = config.node("per-server-chat").getBoolean(true);
+            if (!perServerChat) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("disabled-message",
+                                "&c/msg is disabled because per-server-chat is disabled.")
+                ));
+                return;
+            }
+
+            String[] args = invocation.arguments();
+            if (args.length < 2) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("usage", "&cUsage: /msg <player> <message>")
+                ));
+                return;
+            }
+
+            Optional<ServerConnection> senderConnection = sender.getCurrentServer();
+            if (senderConnection.isEmpty()) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("no-server-message", "&cYou must be connected to a server to use /msg.")
+                ));
+                return;
+            }
+
+            RegisteredServer senderServer = senderConnection.get().getServer();
+
+            String targetName = args[0];
+            Optional<Player> targetOptional = server.getPlayer(targetName);
+            if (targetOptional.isEmpty()) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("player-not-found-message",
+                                "&cThat player could not be found.")
+                ));
+                return;
+            }
+
+            Player target = targetOptional.get();
+            Optional<ServerConnection> targetConnection = target.getCurrentServer();
+
+            if (targetConnection.isEmpty()
+                    || !targetConnection.get().getServer().equals(senderServer)) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("not-on-server-message",
+                                "&cThat player is not on your current server.")
+                ));
+                return;
+            }
+
+            String message = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
+            if (message.isBlank()) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("usage", "&cUsage: /msg <player> <message>")
+                ));
+                return;
+            }
+
+            String senderFormat = getMsgFormat("format-sender",
+                    "&d[MSG] &fYou &7-> &f{receiver}&7: &r{message}");
+            String receiverFormat = getMsgFormat("format-receiver",
+                    "&d[MSG] &f{sender} &7-> &fYou&7: &r{message}");
+
+            Component senderMessage = LEGACY.deserialize(
+                    resolveMsgPlaceholders(senderFormat, sender, target, message)
+            );
+            Component receiverMessage = LEGACY.deserialize(
+                    resolveMsgPlaceholders(receiverFormat, sender, target, message)
+            );
+
+            sender.sendMessage(senderMessage);
+            target.sendMessage(receiverMessage);
+            playMsgSound(target);
+        }
+
+        @Override
+        public List<String> suggest(Invocation invocation) {
+            String[] args = invocation.arguments();
+            if (args.length <= 1) {
+                if (!(invocation.source() instanceof Player sender)) {
+                    return List.of();
+                }
+
+                Optional<ServerConnection> current = sender.getCurrentServer();
+                if (current.isEmpty()
+                        || !config.node("per-server-chat").getBoolean(true)) {
+                    return List.of();
+                }
+
+                String prefix = args.length == 0 ? "" : args[0].toLowerCase();
+                return current.get().getServer().getPlayersConnected().stream()
+                        .map(Player::getUsername)
+                        .filter(name -> !name.equalsIgnoreCase(sender.getUsername()))
+                        .filter(name -> name.toLowerCase().startsWith(prefix))
+                        .sorted(String.CASE_INSENSITIVE_ORDER)
+                        .collect(Collectors.toList());
+            }
+
+            return List.of();
         }
     }
 

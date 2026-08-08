@@ -13,6 +13,13 @@
 # {username-color} - the player's or the group's username color (LuckPerms meta key "username-color")
 # {message-color} - the player's or the group's message color (LuckPerms meta key "message-color")
 #
+# /msg placeholders:
+# {sender} - sender username
+# {sender-displayname} - sender display name (Velocity currently falls back to username)
+# {receiver} - receiver username
+# {receiver-displayname} - receiver display name (Velocity currently falls back to username)
+# {message} - private message content
+#
 # Color codes: Use & for colors (&a, &b, etc.) and &#rrggbb for hex colors.
 # Permissions: lpc.reload, lpc.clearchat, lpc.debug, lpc.colorcodes, lpc.rgbcodes
 #
@@ -20,11 +27,13 @@
 #   /lpc reload - Reload configuration
 #   /lpc clear - Clear chat for all players
 #   /lpc debug <player> - Show resolved prefix/suffix info for a player
+#   /msg <player> <message> - Send a private message to a player on your current server
 #
 # More information: https://www.spigotmc.org/resources/68965
 
 # If true (recommended), chat messages are only broadcast to players on the
 # SAME backend server as the sender. If false, chat is broadcast to the whole proxy.
+# /msg is also enabled only when this is true.
 per-server-chat: true
 
 # How long to wait (ms) for a backend Paper server to resolve PlaceholderAPI
@@ -46,6 +55,29 @@ server-chat-formats:
       # group-formats:
       #   default: "{prefix}{name}&r: {message}"
       #   admin: "&c[Admin] {prefix}{name}&r: {message}"
+
+# Private messages.
+# This section is active only when per-server-chat is true.
+msg:
+  usage: "&cUsage: /msg <player> <message>"
+  disabled-message: "&cno deberias estar viendo este mensaje porque no se usa en el codigo :)"
+  no-server-message: "&cYou must be connected to a server to use /msg."
+  player-not-found-message: "&cThat player could not be found."
+  not-on-server-message: "&cThat player is not on your current server."
+
+  # Message shown to the sender.
+  format-sender: "&d[MSG] &fYou &7-> &f{receiver}&7: &r{message}"
+
+  # Message shown to the receiver.
+  format-receiver: "&d[MSG] &f{sender} &7-> &fYou&7: &r{message}"
+
+  # Velocity can play the Minecraft sound directly for the receiving player,
+  # so no Paper-side companion/plugin-message is required for the sound.
+  sound:
+    enabled: true
+    sound: "minecraft:block.note_block.pling"
+    volume: 1.0
+    pitch: 1.0
 
 # Delay for join messages in milliseconds. This helps the joining player
 # see the message that other players receive when they connect.
