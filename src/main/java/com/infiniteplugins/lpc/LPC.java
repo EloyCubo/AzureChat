@@ -66,6 +66,12 @@ public class LPC {
             .hexColors()
             .build();
 
+    // Matches classic (&a, &l, ...) and hex (&#RRGGBB) color/format codes.
+    private static final Pattern COLOR_CODE_PATTERN = Pattern.compile("(?i)&([0-9a-fk-or]|#[0-9a-f]{6})");
+
+    // Permission node required for a player's own message to keep its color codes.
+    private static final String COLOR_PERMISSION = "azurechat.color";
+
     private final ProxyServer server;
     private final Logger logger;
     private final Path dataDirectory;
@@ -142,6 +148,32 @@ public class LPC {
         } catch (IOException e) {
             logger.error("Failed to load config.yml", e);
         }
+    }
+
+    // ----------------------------------------------------------------------------
+    // Color-code permission gating
+    // ----------------------------------------------------------------------------
+
+    /**
+     * Strips both classic (&a, &l, ...) and hex (&#RRGGBB) color/format codes from a string.
+     * Used to sanitize a player's raw message when they lack the color permission.
+     */
+    private String stripColorCodes(String input) {
+        if (input == null) return input;
+        return COLOR_CODE_PATTERN.matcher(input).replaceAll("");
+    }
+
+    /**
+     * Returns the player's message, stripped of color codes unless they hold
+     * the azurechat.color permission (checked through LuckPerms via Velocity's
+     * permission API).
+     */
+    private String applyColorPermission(Player player, String message) {
+        if (message == null) return null;
+        if (player.hasPermission(COLOR_PERMISSION)) {
+            return message;
+        }
+        return stripColorCodes(message);
     }
 
     // ----------------------------------------------------------------------------
@@ -247,6 +279,11 @@ public class LPC {
         }
 
         String message = event.getMessage();
+
+        // Strip color codes from the player's own message unless they have the color permission.
+        // This must happen BEFORE resolvePlaceholders(), since {message} is substituted into the
+        // format string and the whole result is later deserialized as legacy-color text.
+        message = applyColorPermission(player, message);
 
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
         String group = metaData.getPrimaryGroup();
@@ -508,6 +545,9 @@ public class LPC {
                 ));
                 return;
             }
+
+            // Strip color codes from the sender's message unless they hold the color permission.
+            message = applyColorPermission(sender, message);
 
             String senderFormat = getMsgFormat("format-sender",
                     "&d[MSG] &fYou &7-> &f{receiver}&7: &r{message}");
