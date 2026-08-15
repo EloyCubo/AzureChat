@@ -582,12 +582,13 @@ public class LPC {
     private class MsgSpyCommand implements SimpleCommand {
         @Override
         public void execute(Invocation invocation) {
-            if (!(invocation.source() instanceof Player player)) {
+            if (!(invocation.source() instanceof Player)) {
                 invocation.source().sendMessage(
                         MiniMessage.miniMessage().deserialize("<red>/msgspy can only be used by players.")
                 );
                 return;
             }
+            Player player = (Player) invocation.source();
 
             if (!player.hasPermission("azurechat.msgspy")) {
                 player.sendMessage(LEGACY.deserialize(
