@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
@@ -66,12 +67,6 @@ public class LPC {
             .hexColors()
             .build();
 
-    // Matches classic (&a, &l, ...) and hex (&#RRGGBB) color/format codes.
-    private static final Pattern COLOR_CODE_PATTERN = Pattern.compile("(?i)&([0-9a-fk-or]|#[0-9a-f]{6})");
-
-    // Permission node required for a player's own message to keep its color codes.
-    private static final String COLOR_PERMISSION = "azurechat.color";
-
     private final ProxyServer server;
     private final Logger logger;
     private final Path dataDirectory;
@@ -90,6 +85,9 @@ public class LPC {
     // Tracks which backend server each player was last known to be on,
     // so we can send the correct "leave" message when they disconnect from the proxy entirely.
     private final Map<UUID, RegisteredServer> lastKnownServer = new ConcurrentHashMap<>();
+
+    // Tracks which players (typically staff) have /msg spying enabled.
+    private final Set<UUID> spyEnabled = ConcurrentHashMap.newKeySet();
 
     @Inject
     public LPC(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -117,6 +115,11 @@ public class LPC {
                 .aliases("tell", "w", "whisper")
                 .build();
         commandManager.register(msgMeta, new MsgCommand());
+
+        CommandMeta spyMeta = commandManager.metaBuilder("msgspy")
+                .aliases("socialspy")
+                .build();
+        commandManager.register(spyMeta, new MsgSpyCommand());
 
         server.getChannelRegistrar().register(PLACEHOLDERS_CHANNEL);
         logger.info("AzureChat (LPC for Velocity) has been enabled.");
@@ -148,32 +151,6 @@ public class LPC {
         } catch (IOException e) {
             logger.error("Failed to load config.yml", e);
         }
-    }
-
-    // ----------------------------------------------------------------------------
-    // Color-code permission gating
-    // ----------------------------------------------------------------------------
-
-    /**
-     * Strips both classic (&a, &l, ...) and hex (&#RRGGBB) color/format codes from a string.
-     * Used to sanitize a player's raw message when they lack the color permission.
-     */
-    private String stripColorCodes(String input) {
-        if (input == null) return input;
-        return COLOR_CODE_PATTERN.matcher(input).replaceAll("");
-    }
-
-    /**
-     * Returns the player's message, stripped of color codes unless they hold
-     * the azurechat.color permission (checked through LuckPerms via Velocity's
-     * permission API).
-     */
-    private String applyColorPermission(Player player, String message) {
-        if (message == null) return null;
-        if (player.hasPermission(COLOR_PERMISSION)) {
-            return message;
-        }
-        return stripColorCodes(message);
     }
 
     // ----------------------------------------------------------------------------
@@ -279,11 +256,6 @@ public class LPC {
         }
 
         String message = event.getMessage();
-
-        // Strip color codes from the player's own message unless they have the color permission.
-        // This must happen BEFORE resolvePlaceholders(), since {message} is substituted into the
-        // format string and the whole result is later deserialized as legacy-color text.
-        message = applyColorPermission(player, message);
 
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
         String group = metaData.getPrimaryGroup();
@@ -428,6 +400,7 @@ public class LPC {
     public void onDisconnect(DisconnectEvent event) {
         Player player = event.getPlayer();
         RegisteredServer lastServer = lastKnownServer.remove(player.getUniqueId());
+        spyEnabled.remove(player.getUniqueId());
 
         if (lastServer != null) {
             sendServerLifecycleMessage(lastServer, player, "leave");
@@ -479,15 +452,21 @@ public class LPC {
     private class MsgCommand implements SimpleCommand {
         @Override
         public void execute(Invocation invocation) {
-            if (!(invocation.source() instanceof Player)) {
+            if (!(invocation.source() instanceof Player sender)) {
                 invocation.source().sendMessage(
                         MiniMessage.miniMessage().deserialize("<red>/msg can only be used by players.")
                 );
                 return;
             }
 
-            Player sender = (Player) invocation.source();
             boolean perServerChat = config.node("per-server-chat").getBoolean(true);
+            if (!perServerChat) {
+                sender.sendMessage(LEGACY.deserialize(
+                        getMsgFormat("disabled-message",
+                                "&c/msg is disabled because per-server-chat is disabled.")
+                ));
+                return;
+            }
 
             String[] args = invocation.arguments();
             if (args.length < 2) {
@@ -498,19 +477,14 @@ public class LPC {
             }
 
             Optional<ServerConnection> senderConnection = sender.getCurrentServer();
-
-            // true = same backend only; false = anywhere on the Velocity network.
-            if (perServerChat && senderConnection.isEmpty()) {
+            if (senderConnection.isEmpty()) {
                 sender.sendMessage(LEGACY.deserialize(
-                        getMsgFormat("no-server-message",
-                                "&cYou must be connected to a server to use /msg.")
+                        getMsgFormat("no-server-message", "&cYou must be connected to a server to use /msg.")
                 ));
                 return;
             }
 
-            RegisteredServer senderServer = senderConnection
-                    .map(ServerConnection::getServer)
-                    .orElse(null);
+            RegisteredServer senderServer = senderConnection.get().getServer();
 
             String targetName = args[0];
             Optional<Player> targetOptional = server.getPlayer(targetName);
@@ -525,10 +499,8 @@ public class LPC {
             Player target = targetOptional.get();
             Optional<ServerConnection> targetConnection = target.getCurrentServer();
 
-            // Only enforce the backend restriction when per-server-chat is enabled.
-            if (perServerChat
-                    && (targetConnection.isEmpty()
-                    || !targetConnection.get().getServer().equals(senderServer))) {
+            if (targetConnection.isEmpty()
+                    || !targetConnection.get().getServer().equals(senderServer)) {
                 sender.sendMessage(LEGACY.deserialize(
                         getMsgFormat("not-on-server-message",
                                 "&cThat player is not on your current server.")
@@ -536,18 +508,13 @@ public class LPC {
                 return;
             }
 
-            String message = String.join(" ",
-                    java.util.Arrays.copyOfRange(args, 1, args.length));
-
+            String message = String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length));
             if (message.isBlank()) {
                 sender.sendMessage(LEGACY.deserialize(
                         getMsgFormat("usage", "&cUsage: /msg <player> <message>")
                 ));
                 return;
             }
-
-            // Strip color codes from the sender's message unless they hold the color permission.
-            message = applyColorPermission(sender, message);
 
             String senderFormat = getMsgFormat("format-sender",
                     "&d[MSG] &fYou &7-> &f{receiver}&7: &r{message}");
@@ -564,37 +531,39 @@ public class LPC {
             sender.sendMessage(senderMessage);
             target.sendMessage(receiverMessage);
             playMsgSound(target);
+
+            // Notify staff with /msgspy enabled, skipping the sender/receiver themselves
+            // so they don't see the message twice.
+            String spyFormat = getMsgFormat("format-admin",
+                    "&8[&cSpy&8] &7{sender} &8-> &7{receiver}&8: &f{message}");
+            Component spyMessage = LEGACY.deserialize(
+                    resolveMsgPlaceholders(spyFormat, sender, target, message)
+            );
+
+            for (UUID spyId : spyEnabled) {
+                if (spyId.equals(sender.getUniqueId()) || spyId.equals(target.getUniqueId())) {
+                    continue;
+                }
+                server.getPlayer(spyId).ifPresent(spy -> spy.sendMessage(spyMessage));
+            }
         }
 
         @Override
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
-
             if (args.length <= 1) {
-                if (!(invocation.source() instanceof Player)) {
+                if (!(invocation.source() instanceof Player sender)) {
                     return List.of();
                 }
 
-                Player sender = (Player) invocation.source();
-                boolean perServerChat = config.node("per-server-chat").getBoolean(true);
-                String prefix = args.length == 0 ? "" : args[0].toLowerCase();
-
-                if (perServerChat) {
-                    Optional<ServerConnection> current = sender.getCurrentServer();
-                    if (current.isEmpty()) {
-                        return List.of();
-                    }
-
-                    return current.get().getServer().getPlayersConnected().stream()
-                            .map(Player::getUsername)
-                            .filter(name -> !name.equalsIgnoreCase(sender.getUsername()))
-                            .filter(name -> name.toLowerCase().startsWith(prefix))
-                            .sorted(String.CASE_INSENSITIVE_ORDER)
-                            .collect(Collectors.toList());
+                Optional<ServerConnection> current = sender.getCurrentServer();
+                if (current.isEmpty()
+                        || !config.node("per-server-chat").getBoolean(true)) {
+                    return List.of();
                 }
 
-                // Network-wide suggestions when per-server-chat is disabled.
-                return server.getAllPlayers().stream()
+                String prefix = args.length == 0 ? "" : args[0].toLowerCase();
+                return current.get().getServer().getPlayersConnected().stream()
                         .map(Player::getUsername)
                         .filter(name -> !name.equalsIgnoreCase(sender.getUsername()))
                         .filter(name -> name.toLowerCase().startsWith(prefix))
@@ -602,6 +571,55 @@ public class LPC {
                         .collect(Collectors.toList());
             }
 
+            return List.of();
+        }
+    }
+
+    // ----------------------------------------------------------------------------
+    // /msgspy: staff-only toggle to see all /msg traffic between other players.
+    // Requires the "azurechat.msgspy" permission (grant via LuckPerms).
+    // ----------------------------------------------------------------------------
+    private class MsgSpyCommand implements SimpleCommand {
+        @Override
+        public void execute(Invocation invocation) {
+            if (!(invocation.source() instanceof Player player)) {
+                invocation.source().sendMessage(
+                        MiniMessage.miniMessage().deserialize("<red>/msgspy can only be used by players.")
+                );
+                return;
+            }
+
+            if (!player.hasPermission("azurechat.msgspy")) {
+                player.sendMessage(LEGACY.deserialize(
+                        config.node("msg", "spy", "no-permission-message")
+                                .getString("&cYou do not have permission to use this command.")
+                ));
+                return;
+            }
+
+            UUID id = player.getUniqueId();
+            if (spyEnabled.contains(id)) {
+                spyEnabled.remove(id);
+                player.sendMessage(LEGACY.deserialize(
+                        config.node("msg", "spy", "disabled-message")
+                                .getString("&cMessage spy disabled.")
+                ));
+            } else {
+                spyEnabled.add(id);
+                player.sendMessage(LEGACY.deserialize(
+                        config.node("msg", "spy", "enabled-message")
+                                .getString("&aMessage spy enabled. You will now see all private messages.")
+                ));
+            }
+        }
+
+        @Override
+        public boolean hasPermission(Invocation invocation) {
+            return invocation.source().hasPermission("azurechat.msgspy");
+        }
+
+        @Override
+        public List<String> suggest(Invocation invocation) {
             return List.of();
         }
     }
