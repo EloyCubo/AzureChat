@@ -452,12 +452,13 @@ public class LPC {
     private class MsgCommand implements SimpleCommand {
         @Override
         public void execute(Invocation invocation) {
-            if (!(invocation.source() instanceof Player sender)) {
+            if (!(invocation.source() instanceof Player)) {
                 invocation.source().sendMessage(
                         MiniMessage.miniMessage().deserialize("<red>/msg can only be used by players.")
                 );
                 return;
             }
+            Player sender = (Player) invocation.source();
 
             boolean perServerChat = config.node("per-server-chat").getBoolean(true);
             if (!perServerChat) {
@@ -552,9 +553,10 @@ public class LPC {
         public List<String> suggest(Invocation invocation) {
             String[] args = invocation.arguments();
             if (args.length <= 1) {
-                if (!(invocation.source() instanceof Player sender)) {
+                if (!(invocation.source() instanceof Player)) {
                     return List.of();
                 }
+                Player sender = (Player) invocation.source();
 
                 Optional<ServerConnection> current = sender.getCurrentServer();
                 if (current.isEmpty()
