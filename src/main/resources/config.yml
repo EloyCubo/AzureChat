@@ -21,13 +21,14 @@
 # {message} - private message content
 #
 # Color codes: Use & for colors (&a, &b, etc.) and &#rrggbb for hex colors.
-# Permissions: lpc.reload, lpc.clearchat, lpc.debug, lpc.colorcodes, lpc.rgbcodes
+# Permissions: lpc.reload, lpc.clearchat, lpc.debug, lpc.colorcodes, lpc.rgbcodes, azurechat.msgspy
 #
 # Commands:
 #   /lpc reload - Reload configuration
 #   /lpc clear - Clear chat for all players
 #   /lpc debug <player> - Show resolved prefix/suffix info for a player
 #   /msg <player> <message> - Send a private message to a player on your current server
+#   /msgspy (alias /socialspy) - Toggle seeing all /msg traffic (requires azurechat.msgspy)
 #
 # More information: https://www.spigotmc.org/resources/68965
 
@@ -70,6 +71,16 @@ msg:
 
   # Message shown to the receiver.
   format-receiver: "&d[MSG] &f{sender} &7-> &fYou&7: &r{message}"
+
+  # Message shown to staff who have /msgspy enabled, whenever any /msg is sent.
+  # Uses {sender}, {sender-displayname}, {receiver}, {receiver-displayname}, {message}
+  format-admin: "&8[&cSpy&8] &7{sender} &8-> &7{receiver}&8: &f{message}"
+
+  # Messages related to the /msgspy (alias /socialspy) command.
+  spy:
+    enabled-message: "&aMessage spy enabled. You will now see all private messages."
+    disabled-message: "&cMessage spy disabled."
+    no-permission-message: "&cYou do not have permission to use this command."
 
   # Velocity can play the Minecraft sound directly for the receiving player,
   # so no Paper-side companion/plugin-message is required for the sound.
