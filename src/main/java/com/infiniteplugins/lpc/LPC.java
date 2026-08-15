@@ -154,6 +154,27 @@ public class LPC {
     }
 
     // ----------------------------------------------------------------------------
+    // Restricts color codes in a player's chat message based on permissions.
+    // azurechat.rgbcolor - allows &#rrggbb hex codes
+    // azurechat.color    - allows legacy &a-&f, &0-&9, &k-&o, &r codes
+    // Players without the relevant permission have those codes stripped so
+    // they show up as plain text instead of being applied as colors.
+    // ----------------------------------------------------------------------------
+    private String stripColorIfNoPermission(Player player, String message) {
+        String result = message;
+
+        if (!player.hasPermission("azurechat.rgbcolor")) {
+            result = result.replaceAll("&#[0-9a-fA-F]{6}", "");
+        }
+
+        if (!player.hasPermission("azurechat.color")) {
+            result = result.replaceAll("(?i)&[0-9a-fk-or]", "");
+        }
+
+        return result;
+    }
+
+    // ----------------------------------------------------------------------------
     // Shared placeholder resolution, used by chat AND join/leave messages
     // ----------------------------------------------------------------------------
     private String resolvePlaceholders(String format, Player player, CachedMetaData metaData,
@@ -256,6 +277,7 @@ public class LPC {
         }
 
         String message = event.getMessage();
+        message = stripColorIfNoPermission(player, message);
 
         CachedMetaData metaData = this.luckPerms.getPlayerAdapter(Player.class).getMetaData(player);
         String group = metaData.getPrimaryGroup();
