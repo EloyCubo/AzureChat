@@ -20,6 +20,11 @@
 # {receiver-displayname} - receiver display name (Velocity currently falls back to username)
 # {message} - private message content
 #
+# Mute placeholders (used in "mute.denied-message-with-reason"):
+# {reason} - the reason for the mute, as set by staff via AzureStaff
+# {staff} - the staff member who applied the mute
+# {expires} - formatted expiry date/time, or the "permanent-label" if it never expires
+#
 # Color codes: Use & for colors (&a, &b, etc.) and &#rrggbb for hex colors.
 # Permissions: lpc.reload, lpc.clearchat, lpc.debug, lpc.colorcodes, lpc.rgbcodes, azurechat.msgspy
 #
@@ -89,6 +94,15 @@ msg:
     sound: "minecraft:block.note_block.pling"
     volume: 1.0
     pitch: 1.0
+
+# Messages shown to a player when their chat message is blocked because they
+# are muted (checked live against AzureStaff). {reason}, {staff} and {expires}
+# are only available in "denied-message-with-reason" (used when AzureStaff can
+# report mute details; otherwise the plain "denied-message" is used).
+mute:
+  denied-message: "&cNo puedes hablar en el chat mientras estés muteado."
+  denied-message-with-reason: "&cEstás muteado por: &f{reason}&c. Muteado por: &f{staff}&c. Expira: &f{expires}"
+  permanent-label: "Nunca (permanente)"
 
 # Delay for join messages in milliseconds. This helps the joining player
 # see the message that other players receive when they connect.

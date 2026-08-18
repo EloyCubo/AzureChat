@@ -61,9 +61,18 @@
 			<version>2.12.3</version>
 			<scope>provided</scope>
 		</dependency>
-		<!-- AzureStaff is provided by the Velocity runtime when the plugin is installed.
-		     The jar is not published in a public Maven repository, so we do not
-		     declare it here to keep the project buildable. -->
+		<!-- AzureStaff is provided by the Velocity runtime when the plugin is installed
+		     as a jar under plugins/. It's not published in a public Maven repository,
+		     so you must install it into your local .m2 first (or run "mvn clean install"
+		     on the AzureStaff project itself, which does this automatically):
+		       mvn install:install-file -Dfile=AzureStaff-1.2.0.jar \
+		         -DgroupId=es.azuremc -DartifactId=azurestaff -Dversion=1.2.0 -Dpackaging=jar -->
+		<dependency>
+			<groupId>es.azuremc</groupId>
+			<artifactId>azurestaff</artifactId>
+			<version>1.2.0</version>
+			<scope>provided</scope>
+		</dependency>
 	</dependencies>
 	
 	<!-- DO NOT EDIT unless instructed to do so or you know what you're doing. -->

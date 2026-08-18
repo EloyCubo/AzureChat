@@ -10,6 +10,7 @@ import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
@@ -27,13 +28,14 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.cacheddata.CachedMetaData;
+import es.azuremc.azurestaff.api.AzureStaffAPI;
+import es.azuremc.azurestaff.api.MuteInfo;
 import org.slf4j.Logger;
 import org.spongepowered.configurate.CommentedConfigurationNode;
 import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
 
 import java.io.InputStream;
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -53,12 +55,18 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
-import java.io.IOException;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 @Plugin(
         id = "azurechat",
         name = "AzureChat",
-        version = "1.3.2"
+        version = "1.3.2",
+        dependencies = {
+                // AzureStaff must load first so we can hook its API for mute checks.
+                @Dependency(id = "azurestaff")
+        }
 )
 public class LPC {
 
@@ -82,12 +90,18 @@ public class LPC {
     private CommentedConfigurationNode config;
     private YamlConfigurationLoader configLoader;
 
+    // Cached AzureStaff API instance, resolved once on proxy init.
+    private AzureStaffAPI azureStaffAPI;
+
     // Tracks which backend server each player was last known to be on,
     // so we can send the correct "leave" message when they disconnect from the proxy entirely.
     private final Map<UUID, RegisteredServer> lastKnownServer = new ConcurrentHashMap<>();
 
     // Tracks which players (typically staff) have /msg spying enabled.
+    // Persisted to disk so the setting survives disconnects, relogs and proxy restarts.
     private final Set<UUID> spyEnabled = ConcurrentHashMap.newKeySet();
+    private Path spyDataFile;
+    private YamlConfigurationLoader spyDataLoader;
 
     @Inject
     public LPC(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -99,6 +113,8 @@ public class LPC {
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
         loadConfig();
+        loadSpyData();
+        hookAzureStaff();
 
         try {
             this.luckPerms = LuckPermsProvider.get();
@@ -150,6 +166,75 @@ public class LPC {
             config = configLoader.load();
         } catch (IOException e) {
             logger.error("Failed to load config.yml", e);
+        }
+    }
+
+    // ----------------------------------------------------------------------------
+    // Resolves and caches the AzureStaffAPI instance, used to check mute/ban status.
+    // See AzureStaff's "API para otros plugins" docs. Since "azurestaff" is declared
+    // as a hard dependency, this plugin won't even be loaded by Velocity if AzureStaff
+    // is missing - but we still guard defensively in case the API instance can't be cast.
+    // ----------------------------------------------------------------------------
+    private void hookAzureStaff() {
+        Optional<PluginContainer> container = server.getPluginManager().getPlugin("azurestaff");
+        if (container.isEmpty()) {
+            logger.warn("AzureStaff plugin not found. Mute integration will be disabled.");
+            azureStaffAPI = null;
+            return;
+        }
+
+        azureStaffAPI = container.flatMap(PluginContainer::getInstance)
+                .filter(AzureStaffAPI.class::isInstance)
+                .map(AzureStaffAPI.class::cast)
+                .orElse(null);
+
+        if (azureStaffAPI == null) {
+            logger.warn("AzureStaff was found but its API instance could not be located. Mute integration will be disabled.");
+        } else {
+            logger.info("Hooked into AzureStaff for mute checks.");
+        }
+    }
+
+    // ----------------------------------------------------------------------------
+    // /msgspy persistence: loads the set of UUIDs that had spy mode enabled the
+    // last time the proxy was running, so the setting survives relogs and restarts.
+    // ----------------------------------------------------------------------------
+    private void loadSpyData() {
+        Path spyFile = dataDirectory.resolve("msgspy-data.yml");
+        this.spyDataFile = spyFile;
+        this.spyDataLoader = YamlConfigurationLoader.builder().path(spyFile).build();
+
+        if (!Files.exists(spyFile)) {
+            return;
+        }
+
+        try {
+            CommentedConfigurationNode data = spyDataLoader.load();
+            List<String> stored = data.node("enabled").getList(String.class, List.of());
+            for (String raw : stored) {
+                try {
+                    spyEnabled.add(UUID.fromString(raw));
+                } catch (IllegalArgumentException ignored) {
+                    logger.warn("Ignoring invalid UUID '{}' in msgspy-data.yml", raw);
+                }
+            }
+        } catch (IOException e) {
+            logger.error("Failed to load msgspy-data.yml", e);
+        }
+    }
+
+    private void saveSpyData() {
+        if (spyDataLoader == null) {
+            return;
+        }
+        try {
+            CommentedConfigurationNode data = spyDataLoader.createNode();
+            data.node("enabled").set(
+                    spyEnabled.stream().map(UUID::toString).collect(Collectors.toList())
+            );
+            spyDataLoader.save(data);
+        } catch (IOException e) {
+            logger.error("Failed to save msgspy-data.yml", e);
         }
     }
 
@@ -244,25 +329,49 @@ public class LPC {
     }
 
     private boolean isAzureStaffMuted(Player player) {
-        Optional<PluginContainer> container = server.getPluginManager().getPlugin("azurestaff");
-        if (container.isEmpty()) {
-            return false;
+        return azureStaffAPI != null && azureStaffAPI.isMuted(player.getUniqueId());
+    }
+
+    // Builds the message shown to a muted player when their chat message is blocked,
+    // including reason/staff/expiry details when AzureStaff exposes them.
+    private Component buildMuteDeniedMessage(Player player) {
+        Optional<MuteInfo> activeMute = azureStaffAPI != null
+                ? azureStaffAPI.getActiveMute(player.getUniqueId())
+                : Optional.empty();
+
+        if (activeMute.isEmpty()) {
+            return LEGACY.deserialize(
+                    config.node("mute", "denied-message")
+                            .getString("&cNo puedes hablar en el chat mientras estés muteado.")
+            );
         }
 
-        Optional<?> instance = container.get().getInstance();
-        if (instance.isEmpty()) {
-            return false;
-        }
+        MuteInfo mute = activeMute.get();
+        String reason = mute.reason() != null ? mute.reason() : "Sin especificar";
+        String staffName = mute.staffName() != null ? mute.staffName() : "Consola";
+        String expires = formatMuteExpiry(mute.expiresAt());
 
-        try {
-            Object api = instance.get();
-            Method isMuted = api.getClass().getMethod("isMuted", UUID.class);
-            Object result = isMuted.invoke(api, player.getUniqueId());
-            return Boolean.TRUE.equals(result);
-        } catch (ReflectiveOperationException e) {
-            logger.warn("AzureStaff API is available but could not be used to check mute status", e);
-            return false;
+        String format = config.node("mute", "denied-message-with-reason").getString(
+                "&cEstás muteado por: &f{reason}&c. Muteado por: &f{staff}&c. Expira: &f{expires}"
+        );
+
+        String resolved = format
+                .replace("{reason}", reason)
+                .replace("{staff}", staffName)
+                .replace("{expires}", expires);
+
+        return LEGACY.deserialize(resolved);
+    }
+
+    private String formatMuteExpiry(long expiresAtMillis) {
+        // A mute with no expiry (permanent) is represented as 0 or a negative
+        // value, since expiresAt() returns a primitive long (no null available).
+        if (expiresAtMillis <= 0) {
+            return config.node("mute", "permanent-label").getString("Nunca (permanente)");
         }
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+                .withZone(ZoneId.systemDefault());
+        return formatter.format(Instant.ofEpochMilli(expiresAtMillis));
     }
 
     // ----------------------------------------------------------------------------
@@ -273,6 +382,7 @@ public class LPC {
         Player player = event.getPlayer();
         if (isAzureStaffMuted(player)) {
             event.setResult(PlayerChatEvent.ChatResult.denied());
+            player.sendMessage(buildMuteDeniedMessage(player));
             return;
         }
 
@@ -422,7 +532,8 @@ public class LPC {
     public void onDisconnect(DisconnectEvent event) {
         Player player = event.getPlayer();
         RegisteredServer lastServer = lastKnownServer.remove(player.getUniqueId());
-        spyEnabled.remove(player.getUniqueId());
+        // NOTE: spyEnabled is intentionally NOT cleared here - /msgspy is persisted to
+        // msgspy-data.yml and must survive disconnects, relogs and proxy restarts.
 
         if (lastServer != null) {
             sendServerLifecycleMessage(lastServer, player, "leave");
@@ -481,6 +592,11 @@ public class LPC {
                 return;
             }
             Player sender = (Player) invocation.source();
+
+            if (isAzureStaffMuted(sender)) {
+                sender.sendMessage(buildMuteDeniedMessage(sender));
+                return;
+            }
 
             boolean perServerChat = config.node("per-server-chat").getBoolean(true);
             if (!perServerChat) {
@@ -636,6 +752,10 @@ public class LPC {
                                 .getString("&aMessage spy enabled. You will now see all private messages.")
                 ));
             }
+
+            // Persist immediately so the setting survives a relog or proxy restart.
+            // Runs off the command-handling thread so we never block it on disk I/O.
+            server.getScheduler().buildTask(LPC.this, LPC.this::saveSpyData).schedule();
         }
 
         @Override
