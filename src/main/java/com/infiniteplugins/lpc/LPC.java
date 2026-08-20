@@ -395,6 +395,9 @@ public class LPC {
         Optional<ServerConnection> currentServer = player.getCurrentServer();
         String serverName = currentServer.map(sc -> sc.getServerInfo().getName()).orElse(null);
 
+        // Log a consola: [servidor] usuario: mensaje
+        logger.info("[{}] {}: {}", serverName != null ? serverName : "unknown", player.getUsername(), message);
+
         String format = getChatFormat(group, serverName);
         String resolved = resolvePlaceholders(format, player, metaData, serverName, message);
         Component finalMessage = LEGACY.deserialize(resolved);
@@ -670,6 +673,13 @@ public class LPC {
             sender.sendMessage(senderMessage);
             target.sendMessage(receiverMessage);
             playMsgSound(target);
+
+            // Log a consola: [MSGSPY] [servidor] usuario - otroUsuario: mensaje
+            logger.info("[MSGSPY] [{}] {} - {}: {}",
+                    senderServer.getServerInfo().getName(),
+                    sender.getUsername(),
+                    target.getUsername(),
+                    message);
 
             // Notify staff with /msgspy enabled, skipping the sender/receiver themselves
             // so they don't see the message twice.
